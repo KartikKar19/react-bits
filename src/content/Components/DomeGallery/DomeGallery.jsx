@@ -142,7 +142,9 @@ export default function DomeGallery({
   const openingRef = useRef(false);
   const openStartedAtRef = useRef(0);
   const lastDragEndAt = useRef(0);
-
+  const cancelTapRef = useRef(false);
+  const pointerTypeRef = useRef('mouse');
+  const tapTargetRef = useRef(null);
   const scrollLockedRef = useRef(false);
   const lockScroll = useCallback(() => {
     if (scrollLockedRef.current) return;
@@ -300,49 +302,89 @@ export default function DomeGallery({
       onDragStart: ({ event }) => {
         if (focusedElRef.current) return;
         stopInertia();
-        const evt = event;
+
+        pointerTypeRef.current = event.pointerType || 'mouse';
+        if (pointerTypeRef.current === 'touch') event.preventDefault();
+        if (pointerTypeRef.current === 'touch') lockScroll(); // Lock scroll on touch start
+        
         draggingRef.current = true;
+        cancelTapRef.current = false;
         movedRef.current = false;
         startRotRef.current = { ...rotationRef.current };
-        startPosRef.current = { x: evt.clientX, y: evt.clientY };
+        startPosRef.current = { x: event.clientX, y: event.clientY };
+        
+        const potential = event.target.closest?.('.item__image'); 
+        tapTargetRef.current = potential || null;
       },
-      onDrag: ({ event, last, velocity = [0, 0], direction = [0, 0], movement }) => {
+      onDrag: ({ event, last, velocity: velArr = [0, 0], direction: dirArr = [0, 0], movement }) => {
         if (focusedElRef.current || !draggingRef.current || !startPosRef.current) return;
-        const evt = event;
-        const dxTotal = evt.clientX - startPosRef.current.x;
-        const dyTotal = evt.clientY - startPosRef.current.y;
+        
+        if (pointerTypeRef.current === 'touch') event.preventDefault();
+
+        const dxTotal = event.clientX - startPosRef.current.x;
+        const dyTotal = event.clientY - startPosRef.current.y;
+        
         if (!movedRef.current) {
           const dist2 = dxTotal * dxTotal + dyTotal * dyTotal;
           if (dist2 > 16) movedRef.current = true;
         }
+        
         const nextX = clamp(
           startRotRef.current.x - dyTotal / dragSensitivity,
           -maxVerticalRotationDeg,
           maxVerticalRotationDeg
         );
         const nextY = wrapAngleSigned(startRotRef.current.y + dxTotal / dragSensitivity);
+
         if (rotationRef.current.x !== nextX || rotationRef.current.y !== nextY) {
           rotationRef.current = { x: nextX, y: nextY };
           applyTransform(nextX, nextY);
         }
+
         if (last) {
           draggingRef.current = false;
-          let [vMagX, vMagY] = velocity;
-          const [dirX, dirY] = direction;
+          let isTap = false;
+
+          if (startPosRef.current) {
+            const dx = event.clientX - startPosRef.current.x;
+            const dy = event.clientY - startPosRef.current.y;
+            const dist2 = dx * dx + dy * dy;
+            const TAP_THRESH_PX = pointerTypeRef.current === 'touch' ? 10 : 6;
+            if (dist2 <= TAP_THRESH_PX * TAP_THRESH_PX) {
+              isTap = true;
+            }
+          }
+
+          let [vMagX, vMagY] = velArr;
+          const [dirX, dirY] = dirArr;
           let vx = vMagX * dirX;
           let vy = vMagY * dirY;
-          if (Math.abs(vx) < 0.001 && Math.abs(vy) < 0.001 && Array.isArray(movement)) {
+
+          if (!isTap && Math.abs(vx) < 0.001 && Math.abs(vy) < 0.001 && Array.isArray(movement)) {
             const [mx, my] = movement;
             vx = clamp((mx / dragSensitivity) * 0.02, -1.2, 1.2);
             vy = clamp((my / dragSensitivity) * 0.02, -1.2, 1.2);
           }
-          if (Math.abs(vx) > 0.005 || Math.abs(vy) > 0.005) startInertia(vx, vy);
+
+          if (!isTap && (Math.abs(vx) > 0.005 || Math.abs(vy) > 0.005)) {
+            startInertia(vx, vy);
+          }
+          startPosRef.current = null;
+          cancelTapRef.current = !isTap;
+
+          if (isTap && tapTargetRef.current && !focusedElRef.current) {
+            openItemFromElement(tapTargetRef.current);
+          }
+          tapTargetRef.current = null;
+
+          if (cancelTapRef.current) setTimeout(() => (cancelTapRef.current = false), 120);
           if (movedRef.current) lastDragEndAt.current = performance.now();
           movedRef.current = false;
+          if (pointerTypeRef.current === 'touch') unlockScroll(); // Unlock scroll on drag end
         }
       }
     },
-    { target: mainRef, eventOptions: { passive: true } }
+    { target: mainRef, eventOptions: { passive: false } }
   );
 
   useEffect(() => {
@@ -541,37 +583,6 @@ export default function DomeGallery({
     [enlargeTransitionMs, lockScroll, openedImageHeight, openedImageWidth, segments]
   );
 
-  const onTileClick = useCallback(
-    e => {
-      if (draggingRef.current) return;
-      if (performance.now() - lastDragEndAt.current < 80) return;
-      if (openingRef.current) return;
-      openItemFromElement(e.currentTarget);
-    },
-    [openItemFromElement]
-  );
-
-  const onTilePointerUp = useCallback(
-    e => {
-      if (e.pointerType !== 'touch') return;
-      if (draggingRef.current) return;
-      if (performance.now() - lastDragEndAt.current < 80) return;
-      if (openingRef.current) return;
-      openItemFromElement(e.currentTarget);
-    },
-    [openItemFromElement]
-  );
-
-  const onTileTouchEnd = useCallback(
-    e => {
-      if (draggingRef.current) return;
-      if (performance.now() - lastDragEndAt.current < 80) return;
-      if (openingRef.current) return;
-      openItemFromElement(e.currentTarget);
-    },
-    [openItemFromElement]
-  );
-
   useEffect(() => {
     return () => {
       document.body.classList.remove('dg-scroll-lock');
@@ -611,13 +622,11 @@ export default function DomeGallery({
                 }}
               >
                 <div
-                  className="item__image"
+                  className="item__image absolute block overflow-hidden cursor-pointer bg-gray-200 transition-transform duration-300"
                   role="button"
                   tabIndex={0}
                   aria-label={it.alt || 'Open image'}
-                  onClick={onTileClick}
-                  onPointerUp={onTilePointerUp}
-                  onTouchEnd={onTileTouchEnd}
+
                 >
                   <img src={it.src} draggable={false} alt={it.alt} />
                 </div>
