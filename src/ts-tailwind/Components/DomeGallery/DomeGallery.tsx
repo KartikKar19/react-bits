@@ -810,14 +810,6 @@ export default function DomeGallery({
                     role="button"
                     tabIndex={0}
                     aria-label={it.alt || 'Open image'}
-                    onClick={e => {
-                      if (performance.now() - lastDragEndAt.current < 80) return;
-                      openItemFromElement(e.currentTarget as HTMLElement);
-                    }}
-                    onTouchEnd={e => {
-                      if (performance.now() - lastDragEndAt.current < 80) return;
-                      openItemFromElement(e.currentTarget);
-                    }}
                     style={{
                       inset: '10px',
                       borderRadius: `var(--tile-radius, ${imageBorderRadius})`,
